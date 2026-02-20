@@ -52,14 +52,14 @@ dependencies = [
 
 [[package]]
 name = "nano-rust-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "nano-rust-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nano-rust-core",
  "pyo3",

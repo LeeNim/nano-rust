@@ -17,18 +17,14 @@ Output:
 The generated .rs file can be copied to your ESP32 project's src/ directory.
 """
 
-import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-# Add scripts/ to path for nano_rust_utils
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-
-from nano_rust_utils import (
+# Import from the bundled PyPI package (no need to clone repo)
+from nano_rust_py.utils import (
     quantize_to_i8,
     quantize_weights,
     calibrate_model,
@@ -178,7 +174,7 @@ def main():
     sample_input = train_model(model)
 
     # Step 3: Export
-    output_path = PROJECT_ROOT / "generated" / "sensor_model.rs"
+    output_path = Path(__file__).resolve().parent.parent / "generated" / "sensor_model.rs"
     export_model(model, sample_input, output_path)
 
     print("\n" + "=" * 60)

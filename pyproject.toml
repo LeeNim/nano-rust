@@ -4,11 +4,12 @@ build-backend = "maturin"
 
 [project]
 name = "nano-rust-py"
-version = "0.1.0"
-description = "TinyML inference engine for embedded devices — Rust no_std core with Python bindings"
+version = "0.2.0"
+description = "TinyML inference engine for embedded devices — Rust no_std core with Python bindings and quantization utilities"
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.8"
+dependencies = ["numpy"]
 authors = [
     {name = "Niem Le"}
 ]
@@ -38,7 +39,9 @@ Repository = "https://github.com/LeeNim/nano-rust"
 [tool.maturin]
 # Build the py_binding crate (not the workspace root)
 manifest-path = "py_binding/Cargo.toml"
-module-name = "nano_rust_py"
+module-name = "nano_rust_py.nano_rust_py"
+# Mixed Rust+Python mode: include Python source files
+python-source = "python"
 
 [project.optional-dependencies]
 train = ["torch", "torchvision", "numpy"]

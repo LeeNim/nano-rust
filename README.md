@@ -2,7 +2,7 @@
 
 **TinyML Inference Engine — Train in PyTorch, Run on Microcontrollers**
 
-[![PyPI](https://img.shields.io/pypi/v/nano-rust-py)](https://pypi.org/project/nano-rust-py/)
+[![PyPI](https://img.shields.io/pypi/v/nano-rust-py)](https://pypi.org/project/nano-rust-py/)  ![Version](https://img.shields.io/badge/version-0.2.0-brightgreen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ```
@@ -18,6 +18,7 @@ pip install nano-rust-py
 ```
 
 That's it. No Rust toolchain needed for using the library.
+Includes both the Rust inference engine **and** Python quantization utilities.
 
 ```python
 import nano_rust_py
@@ -247,7 +248,24 @@ print(class_id)  # → 2
 
 ---
 
-## 🔧 Python Utilities — `scripts/nano_rust_utils.py`
+## 🔧 Python Utilities — `nano_rust_py.utils`
+
+All utilities are **bundled in the PyPI package** — no need to clone the repo.
+
+```python
+from nano_rust_py.utils import (
+    quantize_to_i8,
+    quantize_weights,
+    calibrate_model,
+    compute_requant_params,
+    compute_activation_scale_params,
+    export_to_rust,
+    export_weights_bin,
+)
+```
+
+> **Note**: `numpy` is installed as a dependency. `torch` is only needed if you use
+> `quantize_weights()` or `calibrate_model()` — install with `pip install nano-rust-py[train]`.
 
 These utilities bridge PyTorch training and NANO-RUST inference.
 
@@ -257,7 +275,8 @@ Quantize any float32 tensor to i8 using symmetric linear scaling.
 
 ```python
 import numpy as np
-from nano_rust_utils import quantize_to_i8
+from nano_rust_py.utils import quantize_to_i8
+
 
 float_data = np.array([0.5, -0.3, 1.0, -1.0], dtype=np.float32)
 q_data, scale = quantize_to_i8(float_data)
@@ -276,7 +295,8 @@ Walk a PyTorch model and quantize all weight tensors.
 
 ```python
 import torch.nn as nn
-from nano_rust_utils import quantize_weights
+from nano_rust_py.utils import quantize_weights
+
 
 model = nn.Sequential(
     nn.Linear(784, 128),
@@ -310,7 +330,8 @@ q = quantize_weights(model)
 Run float model and compute per-layer requantization parameters.
 
 ```python
-from nano_rust_utils import calibrate_model, quantize_to_i8, quantize_weights
+from nano_rust_py.utils import calibrate_model, quantize_to_i8, quantize_weights
+
 
 # 1. Quantize weights
 q_weights = quantize_weights(model)
@@ -336,7 +357,8 @@ cal = calibrate_model(model, sample_input, q_weights, input_scale)
 Compute TFLite-style fixed-point multiplier and shift.
 
 ```python
-from nano_rust_utils import compute_requant_params
+from nano_rust_py.utils import compute_requant_params
+
 
 M, shift = compute_requant_params(
     input_scale=0.00787,    # from quantize_to_i8(input)
@@ -354,7 +376,8 @@ print(M, shift)  # → (1407, 15)
 Generate complete Rust source code for the model weights and builder function.
 
 ```python
-from nano_rust_utils import export_to_rust
+from nano_rust_py.utils import export_to_rust
+
 
 rust_code = export_to_rust(model, "digit_classifier", input_shape=[1, 28, 28])
 with open("generated/digit_classifier.rs", "w") as f:
@@ -385,7 +408,8 @@ pub fn build_digit_classifier() -> SequentialModel<'static> {
 Export quantized weights to binary files for `include_bytes!` in Rust.
 
 ```python
-from nano_rust_utils import export_weights_bin
+from nano_rust_py.utils import export_weights_bin
+
 
 paths = export_weights_bin(q_weights, "output/")
 # Creates:
@@ -417,23 +441,20 @@ Open notebooks in Jupyter/VS Code and select your venv kernel.
 | 04 | `04_activation_functions` | Side-by-side comparison: ReLU vs Sigmoid vs Tanh. Fixed vs scaled modes. |
 | 05 | `05_transfer_learning` | Frozen backbone (Flash) + trainable head (RAM). Hybrid memory pattern. |
 
-### Real-World Test Scripts (`notebooks-for-test/`)
+### Real-World Examples (`notebook-realworld-examples/`)
 
-Each script follows the full workflow:  
+Full Jupyter notebooks — each follows the complete workflow:  
 **Train (GPU) → Quantize → Calibrate → Build NANO Model → Verify Accuracy**
 
-| # | Script | Task | Training Data | Accuracy |
-|---|--------|------|---------------|----------|
-| 06 | `run_06_mnist.py` | Digit classification | MNIST (28×28) | ~97% |
-| 07 | `run_07_fashion.py` | Fashion item recognition | Fashion-MNIST (28×28) | ~87% |
-| 08 | `run_08_sensor.py` | Industrial anomaly detection | Synthetic sensor data | ~98% |
-| 09 | `run_09_keyword_spotting.py` | Voice keyword detection | Synthetic MFCC features | ~79% |
-| 10 | `run_10_text_classifier.py` | Text sentiment analysis | Bag-of-words features | 100% |
+| # | Notebook | Task | Training Data | Accuracy |
+|---|----------|------|---------------|----------|
+| 06 | `06_mnist.ipynb` | Digit classification | MNIST (28×28) | ~97% |
+| 07 | `07_fashion_mnist.ipynb` | Fashion item recognition | Fashion-MNIST (28×28) | ~87% |
+| 08 | `08_sensor_anomaly.ipynb` | Industrial anomaly detection | Synthetic sensor data | ~98% |
+| 09 | `09_keyword_spotting.ipynb` | Voice keyword detection | Speech Commands MFCC | ~79% |
+| 10 | `10_text_classifier.ipynb` | Text topic classification | Bag-of-words features | 100% |
 
-Run any script:
-```bash
-python notebooks-for-test/run_06_mnist.py
-```
+Open any notebook in Jupyter or VS Code and run all cells.
 
 ---
 
@@ -630,13 +651,17 @@ nano-rust/
 │           ├── activations.rs  # ReLU, Sigmoid, Tanh, Softmax (LUT)
 │           ├── flatten.rs      # Flatten 3D→1D
 │           └── pooling.rs      # MaxPool2D
-├── py_binding/                 # PyO3 Python bindings
+├── py_binding/                 # PyO3 Python bindings (compiled Rust)
 │   └── src/lib.rs              # PySequentialModel wrapper
-├── scripts/
-│   ├── nano_rust_utils.py      # Quantization, calibration, export tools
+├── python/                     # Pure Python modules (bundled in PyPI)
+│   └── nano_rust_py/
+│       ├── __init__.py         # Package init — re-exports Rust types
+│       └── utils.py            # Quantization, calibration, export tools
+├── scripts/                    # Standalone scripts (not in PyPI)
+│   ├── nano_rust_utils.py      # Legacy utils (now in nano_rust_py.utils)
 │   └── export.py               # CLI weight exporter
 ├── notebooks/                  # Validation notebooks (01-05)
-├── notebooks-for-test/         # Real-world test scripts (06-10)
+├── notebook-realworld-examples/ # Real-world Jupyter notebooks (06-10)
 ├── examples/                   # ESP32 deployment examples
 ├── generated/                  # Exported Rust weight files
 ├── pyproject.toml              # pip/maturin build config
@@ -684,6 +709,7 @@ python -c "import nano_rust_py; print('OK')"
 ## 🔮 Roadmap
 
 - [x] v0.1.0: Core inference engine with scale-aware requantization
-- [ ] v0.2.0: Const Generics refactor for compile-time optimization
-- [ ] v0.3.0: On-device training (backprop for trainable head)
-- [ ] v0.4.0: ARM SIMD intrinsics (SMLAD) for Cortex-M
+- [x] v0.2.0: Bundled Python utilities (`nano_rust_py.utils`) in PyPI package
+- [ ] v0.3.0: Const Generics refactor for compile-time optimization
+- [ ] v0.4.0: On-device training (backprop for trainable head)
+- [ ] v0.5.0: ARM SIMD intrinsics (SMLAD) for Cortex-M
