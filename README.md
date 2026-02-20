@@ -1,66 +1,478 @@
 # 🧠 NANO-RUST-AI
 
-**TinyML Framework for Embedded Devices — Rust `no_std` Core + Python Bindings**
+**TinyML Inference Engine — Train in PyTorch, Run on Microcontrollers**
 
-Train in PyTorch → Quantize (i8) → Run on MCU (ESP32, STM32, Cortex-M)
+[![PyPI](https://img.shields.io/pypi/v/nano-rust-py)](https://pypi.org/project/nano-rust-py/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+```
+Train (PyTorch, GPU) → Quantize (float32 → int8) → Verify (Python) → Deploy (ESP32/STM32)
+```
 
 ---
 
-## ✨ Features
+## 📦 Installation
 
-- **🔒 No Heap**: Pure `no_std` — zero `malloc`, zero dynamic allocation
-- **⚡ Int8 Quantization**: All compute in i8/i32 for 4× memory savings over f32
-- **🧊 Hybrid Memory**: Frozen weights in Flash (0 bytes RAM), trainable head in RAM
-- **🎯 Scale-Aware Requantization**: TFLite-style `(acc × M) >> shift` for accurate i8 output
-- **🐍 Python Bindings**: PyO3 wrapper for seamless PyTorch → NANO-RUST pipeline
-- **📦 Arena Allocator**: User provides `&mut [u8]` buffer — library self-manages within it
+```bash
+pip install nano-rust-py
+```
+
+That's it. No Rust toolchain needed for using the library.
+
+```python
+import nano_rust_py
+print(nano_rust_py.__name__)  # → "nano_rust_py"
+```
+
+> **For development** (modifying Rust source): see [Development Setup](#-development-setup) below.
 
 ---
 
-## 📋 Quick Start
+## 🚀 Quick Start — 3-Step Example
 
-### 1. Prerequisites
+```python
+import nano_rust_py
 
-| Tool | Version |
-|------|---------|
-| Rust | 1.70+ (`rustup install stable`) |
-| Python | 3.9+ |
-| maturin | `pip install maturin` |
+# Step 1: Create model (input: 4 features, arena: 4KB scratch memory)
+model = nano_rust_py.PySequentialModel(input_shape=[4], arena_size=4096)
 
-### 2. Create Virtual Environment
+# Step 2: Add layers with i8 weights
+#   Dense layer: 4 inputs → 3 outputs
+#   weights = [4×3] matrix flattened, bias = [3] vector
+model.add_dense(
+    weights=[10, -5, 3, 7, -2, 8, -4, 6, 1, 5, -3, 9],  # 4×3 = 12 values
+    bias=[1, -1, 2]                                        # 3 values
+)
+model.add_relu()
 
-```bash
-# Create and activate venv
-python -m venv .venv
+# Step 3: Run inference
+input_data = [100, -50, 30, 70]  # i8 values: [-128, 127]
+output = model.forward(input_data)
+print(output)  # → [15, 0, 22]  (i8 values after ReLU)
 
-# Windows
-.venv\Scripts\activate
-
-# Linux/Mac
-source .venv/bin/activate
-
-# Install dependencies
-pip install maturin numpy torch torchvision jupyter ipykernel
+# Get predicted class
+prediction = model.predict(input_data)
+print(prediction)  # → 2  (argmax index)
 ```
 
-### 3. Build & Install the Library
+---
 
-```bash
-# IMPORTANT: Set CARGO_TARGET_DIR outside OneDrive to avoid file locking
-# Windows PowerShell:
-$env:CARGO_TARGET_DIR = "$env:USERPROFILE\.nanorust_target"
+## 📖 Complete Python API Reference
 
-# Build and install into the active venv
-maturin develop --release
+### `PySequentialModel` — The Core Model Class
+
+#### Constructor
+
+```python
+model = nano_rust_py.PySequentialModel(
+    input_shape,   # List[int] — shape of input tensor
+    arena_size     # int — scratch memory in bytes
+)
 ```
 
-### 4. Register Jupyter Kernel (for notebooks)
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `input_shape` | `List[int]` | `[N]` for 1D, `[C, H, W]` for 3D (e.g., `[1, 28, 28]` for MNIST) |
+| `arena_size` | `int` | Bytes for intermediate computation. Rule: `2 × largest_layer_output × sizeof(i8)` |
 
-```bash
-python -m ipykernel install --user --name nanorust --display-name "NanoRust (venv)"
+```python
+# 1D input (e.g., sensor features)
+model = nano_rust_py.PySequentialModel([128], 4096)
+
+# 3D input (e.g., MNIST image: 1 channel, 28×28)
+model = nano_rust_py.PySequentialModel([1, 28, 28], 32768)
 ```
 
-Then select the **"NanoRust (venv)"** kernel in Jupyter when running notebooks.
+---
+
+### Layer Methods
+
+#### `add_dense(weights, bias)` — Fully-Connected Layer (Frozen)
+
+Weights stored in Flash (0 bytes RAM). Uses simple requantization.
+
+```python
+# 4 inputs → 2 outputs
+model.add_dense(
+    weights=[10, -5, 3, 7, -2, 8],  # flat [out × in] = [2 × 4] = 8 values
+    bias=[1, -1]                     # [out] = 2 values
+)
+```
+
+| Parameter | Type | Shape | Description |
+|-----------|------|-------|-------------|
+| `weights` | `List[int]` | `[out_features × in_features]` | i8 weight matrix, **row-major** |
+| `bias` | `List[int]` | `[out_features]` | i8 bias vector |
+
+**Output**: `out[j] = clamp(Σ(w[j,i] × x[i]) + bias[j])` requantized to i8
+
+---
+
+#### `add_dense_with_requant(weights, bias, requant_m, requant_shift)` — Dense with Calibrated Requantization
+
+For **high-accuracy** inference. Uses TFLite-style `(acc × M) >> shift`.
+
+```python
+model.add_dense_with_requant(
+    weights=[10, -5, 3, 7, -2, 8],
+    bias=[1, -1],
+    requant_m=1234,       # int32 multiplier (from calibration)
+    requant_shift=15      # uint32 bit-shift (from calibration)
+)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `requant_m` | `int` | Fixed-point multiplier from `calibrate_model()` |
+| `requant_shift` | `int` | Bit-shift from `calibrate_model()` |
+
+> **When to use**: Always prefer this over `add_dense()` when you have calibration data. Accuracy improves from ~85% to ~97%.
+
+---
+
+#### `add_conv2d(kernel, bias, in_ch, out_ch, kh, kw, stride, padding)` — 2D Convolution (Frozen)
+
+```python
+# 1 input channel → 8 output channels, 3×3 kernel
+model.add_conv2d(
+    kernel=[...],   # [out_ch × in_ch × kh × kw] = 8×1×3×3 = 72 values
+    bias=[...],     # [out_ch] = 8 values
+    in_ch=1, out_ch=8, kh=3, kw=3,
+    stride=1, padding=1
+)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `kernel` | `List[int]` | i8 kernel, shape `[out_ch × in_ch × kh × kw]`, row-major |
+| `bias` | `List[int]` | i8 bias, shape `[out_ch]` |
+| `in_ch` | `int` | Input channels |
+| `out_ch` | `int` | Output channels (number of filters) |
+| `kh`, `kw` | `int` | Kernel height and width |
+| `stride` | `int` | Stride (typically 1 or 2) |
+| `padding` | `int` | Zero-padding (use `kh // 2` to preserve spatial size) |
+
+**Output shape**: `[out_ch, (H + 2*pad - kh) / stride + 1, (W + 2*pad - kw) / stride + 1]`
+
+---
+
+#### `add_conv2d_with_requant(kernel, bias, in_ch, out_ch, kh, kw, stride, padding, requant_m, requant_shift)` — Conv2D with Calibrated Requantization
+
+Same as `add_conv2d` but with calibrated requantization for accuracy.
+
+```python
+model.add_conv2d_with_requant(
+    kernel=[...], bias=[...],
+    in_ch=1, out_ch=8, kh=3, kw=3, stride=1, padding=1,
+    requant_m=2048, requant_shift=14
+)
+```
+
+---
+
+#### `add_trainable_dense(in_features, out_features)` — Trainable Layer (RAM)
+
+Weights live in RAM (for on-device fine-tuning). **Not for frozen inference**.
+
+```python
+model.add_trainable_dense(128, 10)  # 128 → 10, weights in RAM
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `in_features` | `int` | Input dimension |
+| `out_features` | `int` | Output dimension |
+
+> **RAM cost**: `in_features × out_features + out_features` bytes
+
+---
+
+#### Activation Layers
+
+| Method | Formula | When to use |
+|--------|---------|-------------|
+| `add_relu()` | `max(0, x)` | Default choice, fastest |
+| `add_sigmoid()` | `1 / (1 + e^(-x/16))` | Binary classification, fixed-scale |
+| `add_sigmoid_scaled(mult, shift)` | Calibrated sigmoid LUT | After calibration |
+| `add_tanh()` | `tanh(x/32)` | Centered output [-1, 1], fixed-scale |
+| `add_tanh_scaled(mult, shift)` | Calibrated tanh LUT | After calibration |
+| `add_softmax()` | Pseudo-softmax approximation | Multi-class output (last layer) |
+
+```python
+# Simple (no calibration needed)
+model.add_relu()
+
+# Calibrated (from calibrate_model output)
+model.add_sigmoid_scaled(scale_mult=42, scale_shift=8)
+model.add_tanh_scaled(scale_mult=84, scale_shift=8)
+```
+
+> **Important**: `add_sigmoid()` and `add_tanh()` use a fixed scale divisor (16 and 32 respectively). For best accuracy, use the `_scaled` variants with parameters from `calibrate_model()`.
+
+---
+
+#### Structural Layers
+
+| Method | Parameters | Description |
+|--------|------------|-------------|
+| `add_flatten()` | — | Reshape 3D `[C,H,W]` → 1D `[C×H×W]`. Use between conv and dense. |
+| `add_max_pool2d(kernel, stride, padding)` | `int, int, int` | Reduce spatial dims by taking max over kernel window |
+
+```python
+model.add_max_pool2d(kernel=2, stride=2, padding=0)
+# Input [8, 28, 28] → Output [8, 14, 14]
+```
+
+---
+
+### Inference Methods
+
+#### `model.forward(input_data)` → `List[int]`
+
+Run forward pass, get raw i8 output vector.
+
+```python
+output = model.forward([100, -50, 30, 70])
+print(output)  # → [15, -8, 22]  (raw i8 activations)
+```
+
+#### `model.predict(input_data)` → `int`
+
+Run forward pass, get argmax class index.
+
+```python
+class_id = model.predict([100, -50, 30, 70])
+print(class_id)  # → 2
+```
+
+---
+
+## 🔧 Python Utilities — `scripts/nano_rust_utils.py`
+
+These utilities bridge PyTorch training and NANO-RUST inference.
+
+### `quantize_to_i8(tensor, scale=127.0)` → `(np.ndarray, float)`
+
+Quantize any float32 tensor to i8 using symmetric linear scaling.
+
+```python
+import numpy as np
+from nano_rust_utils import quantize_to_i8
+
+float_data = np.array([0.5, -0.3, 1.0, -1.0], dtype=np.float32)
+q_data, scale = quantize_to_i8(float_data)
+print(q_data)   # → [ 64, -38, 127, -127]
+print(scale)    # → 0.00787  (max_abs / 127)
+
+# To dequantize: float_value ≈ i8_value × scale
+print(q_data[0] * scale)  # → 0.503 ≈ 0.5 ✓
+```
+
+---
+
+### `quantize_weights(model)` → `Dict`
+
+Walk a PyTorch model and quantize all weight tensors.
+
+```python
+import torch.nn as nn
+from nano_rust_utils import quantize_weights
+
+model = nn.Sequential(
+    nn.Linear(784, 128),
+    nn.ReLU(),
+    nn.Linear(128, 10),
+)
+
+q = quantize_weights(model)
+# Returns: {
+#   '0': {
+#     'type': 'Linear',
+#     'weights': np.ndarray (i8, shape [128, 784]),
+#     'bias': np.ndarray (i8, shape [128]),
+#     'weight_scale': 0.00312,
+#     'bias_scale': 0.00156,
+#     'params': {'in_features': 784, 'out_features': 128}
+#   },
+#   '2': {
+#     'type': 'Linear',
+#     'weights': np.ndarray (i8, shape [10, 128]),
+#     ...
+#   }
+# }
+# Note: ReLU (layer '1') has no weights, so it is skipped.
+```
+
+---
+
+### `calibrate_model(model, input_tensor, q_weights, input_scale)` → `Dict`
+
+Run float model and compute per-layer requantization parameters.
+
+```python
+from nano_rust_utils import calibrate_model, quantize_to_i8, quantize_weights
+
+# 1. Quantize weights
+q_weights = quantize_weights(model)
+
+# 2. Prepare a representative input
+sample_input = torch.randn(1, 784)
+q_input, input_scale = quantize_to_i8(sample_input.numpy().flatten())
+
+# 3. Calibrate
+cal = calibrate_model(model, sample_input, q_weights, input_scale)
+# Returns: {
+#   '0': (requant_m=1234, requant_shift=15, bias_corrected=[...]),
+#   '2': (requant_m=5678, requant_shift=14, bias_corrected=[...]),
+# }
+```
+
+> **Why calibrate?** Without calibration, the library uses a generic `shift = ceil(log2(k)) + 7` which is approximate. Calibration computes the *exact* scale ratio between input, weights, and output — raising accuracy from ~85% to 95-99%.
+
+---
+
+### `compute_requant_params(input_scale, weight_scale, output_scale)` → `(int, int)`
+
+Compute TFLite-style fixed-point multiplier and shift.
+
+```python
+from nano_rust_utils import compute_requant_params
+
+M, shift = compute_requant_params(
+    input_scale=0.00787,    # from quantize_to_i8(input)
+    weight_scale=0.00312,   # from quantize_weights(model)
+    output_scale=0.00450    # from quantize_to_i8(expected_output)
+)
+print(M, shift)  # → (1407, 15)
+# Meaning: output_i8 ≈ (accumulator × 1407) >> 15
+```
+
+---
+
+### `export_to_rust(model, model_name, input_shape)` → `str`
+
+Generate complete Rust source code for the model weights and builder function.
+
+```python
+from nano_rust_utils import export_to_rust
+
+rust_code = export_to_rust(model, "digit_classifier", input_shape=[1, 28, 28])
+with open("generated/digit_classifier.rs", "w") as f:
+    f.write(rust_code)
+```
+
+**Output file contains**:
+```rust
+// Auto-generated by nano_rust_utils
+static LAYER_0_W: &[i8] = &[10, -5, 3, ...];
+static LAYER_0_B: &[i8] = &[1, -1, ...];
+
+pub fn build_digit_classifier() -> SequentialModel<'static> {
+    let mut model = SequentialModel::new();
+    model.add(Box::new(FrozenDense::new_with_requant(
+        LAYER_0_W, LAYER_0_B, 784, 128, 1234, 15
+    ).unwrap()));
+    model.add(Box::new(ReLULayer));
+    // ...
+    model
+}
+```
+
+---
+
+### `export_weights_bin(q_weights, output_dir)` → `List[Path]`
+
+Export quantized weights to binary files for `include_bytes!` in Rust.
+
+```python
+from nano_rust_utils import export_weights_bin
+
+paths = export_weights_bin(q_weights, "output/")
+# Creates:
+#   output/0_w.bin  (128 × 784 = 100,352 bytes)
+#   output/0_b.bin  (128 bytes)
+#   output/2_w.bin  (10 × 128 = 1,280 bytes)
+#   output/2_b.bin  (10 bytes)
+```
+
+---
+
+## 📓 Notebooks — Learning Guide
+
+### Prerequisites
+
+```bash
+pip install nano-rust-py numpy torch torchvision ipykernel
+```
+
+Open notebooks in Jupyter/VS Code and select your venv kernel.
+
+### Validation Notebooks (`notebooks/`)
+
+| # | Notebook | What You'll Learn |
+|---|----------|-------------------|
+| 01 | `01_pipeline_validation` | Full pipeline: Conv→ReLU→Flatten→Dense. Bit-exact comparison between float32 and i8. |
+| 02 | `02_mlp_classification` | Dense→ReLU→Dense (MLP). Manual weight quantization and verification. |
+| 03 | `03_deep_cnn` | Deep CNN with Conv→ReLU→MaxPool stacking. Memory estimation for MCU. |
+| 04 | `04_activation_functions` | Side-by-side comparison: ReLU vs Sigmoid vs Tanh. Fixed vs scaled modes. |
+| 05 | `05_transfer_learning` | Frozen backbone (Flash) + trainable head (RAM). Hybrid memory pattern. |
+
+### Real-World Test Scripts (`notebooks-for-test/`)
+
+Each script follows the full workflow:  
+**Train (GPU) → Quantize → Calibrate → Build NANO Model → Verify Accuracy**
+
+| # | Script | Task | Training Data | Accuracy |
+|---|--------|------|---------------|----------|
+| 06 | `run_06_mnist.py` | Digit classification | MNIST (28×28) | ~97% |
+| 07 | `run_07_fashion.py` | Fashion item recognition | Fashion-MNIST (28×28) | ~87% |
+| 08 | `run_08_sensor.py` | Industrial anomaly detection | Synthetic sensor data | ~98% |
+| 09 | `run_09_keyword_spotting.py` | Voice keyword detection | Synthetic MFCC features | ~79% |
+| 10 | `run_10_text_classifier.py` | Text sentiment analysis | Bag-of-words features | 100% |
+
+Run any script:
+```bash
+python notebooks-for-test/run_06_mnist.py
+```
+
+---
+
+## 🏗️ The Complete Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 1: Train in PyTorch (PC/GPU)                              │
+│  ─────────────────────────────────────                          │
+│  • Define nn.Sequential model                                   │
+│  • Train on dataset (MNIST, sensor data, audio, etc.)           │
+│  • Achieve desired float32 accuracy                             │
+├─────────────────────────────────────────────────────────────────┤
+│  STEP 2: Quantize & Calibrate (Python)                          │
+│  ─────────────────────────────────────                          │
+│  • quantize_weights(model) → i8 weights + scales               │
+│  • calibrate_model() → requant_m, requant_shift per layer       │
+│  • Memory shrinks 4× (float32 → int8)                          │
+├─────────────────────────────────────────────────────────────────┤
+│  STEP 3: Build NANO Model & Verify (Python)                     │
+│  ─────────────────────────────────────                          │
+│  • Create PySequentialModel with i8 weights                     │
+│  • Run same test inputs → compare with PyTorch                  │
+│  • Verify accuracy loss < 5% (typically < 2%)                   │
+├─────────────────────────────────────────────────────────────────┤
+│  STEP 4: Export to Rust (Python)                                │
+│  ─────────────────────────────────────                          │
+│  • export_to_rust(model, "my_model") → .rs file                │
+│  • Contains: static weight arrays + builder function            │
+│  • Or export_weights_bin() → .bin files for include_bytes!      │
+├─────────────────────────────────────────────────────────────────┤
+│  STEP 5: Deploy to MCU (Rust)                                   │
+│  ─────────────────────────────────────                          │
+│  • include!("my_model.rs") in firmware                          │
+│  • Allocate arena buffer (stack/static)                         │
+│  • Read sensor → quantize input → inference → action            │
+│  • See examples/esp32_deploy.rs                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -87,193 +499,77 @@ Then select the **"NanoRust (venv)"** kernel in Jupyter when running notebooks.
 ### Memory Layout on MCU
 
 ```
-FLASH (4MB)                    RAM (320KB)
-┌─────────────────────┐        ┌──────────────────┐
-│ Frozen Backbone     │        │ Arena Buffer      │
-│ - Conv2D weights    │        │ ┌──────────────┐  │
-│ - Dense weights     │        │ │ Intermediate │  │
-│ - Bias arrays       │        │ │ activations  │  │
-│ (read-only, static) │        │ ├──────────────┤  │
-│                     │        │ │ Trainable    │  │
-│                     │        │ │ Head weights │  │
-│                     │        │ └──────────────┘  │
-└─────────────────────┘        └──────────────────┘
+FLASH (read-only)                RAM (read-write)
+┌─────────────────────┐          ┌──────────────────┐
+│ Frozen weights      │          │ Arena Buffer      │
+│ - Conv2D kernels    │          │ ┌──────────────┐  │
+│ - Dense weights     │          │ │ Intermediate │  │
+│ - Bias arrays       │          │ │ activations  │  │
+│ (.rs static arrays) │          │ ├──────────────┤  │
+│                     │          │ │ Trainable    │  │
+│ Cost: N bytes       │          │ │ head weights │  │
+│ RAM cost: 0 bytes   │          │ └──────────────┘  │
+└─────────────────────┘          └──────────────────┘
 ```
+
+### Memory Budget Rules
+
+| Component | Formula | Example (MNIST MLP) |
+|-----------|---------|---------------------|
+| Frozen weights | `Σ(in × out)` per dense + `Σ(in_ch × out_ch × kh × kw)` per conv | 100KB Flash |
+| Arena buffer | `2 × max(layer_output_size)` | 2 × 784 = 1.6KB RAM |
+| Bias arrays | `Σ(out_features)` per layer | 138 bytes Flash |
+| Trainable head (if any) | `in × out + out` | 1.3KB RAM |
+
+> **ESP32 budget**: 4MB Flash, 520KB RAM. A typical model uses <100KB Flash + <20KB RAM.
 
 ---
 
-## 🐍 Python API Reference
+## 🚀 ESP32 Deployment
 
-### `nano_rust_py.PySequentialModel`
+See the complete examples:
 
-```python
-model = nano_rust_py.PySequentialModel(
-    input_shape=[C, H, W],    # or [N] for 1D
-    arena_size=32768           # bytes for scratch memory
-)
-```
+- [`examples/esp32_deploy.rs`](examples/esp32_deploy.rs) — Rust firmware template
+- [`examples/export_for_esp32.py`](examples/export_for_esp32.py) — Python export pipeline
 
-### Layer Methods
-
-| Method | Description |
-|--------|-------------|
-| `add_dense(weights, bias)` | Dense layer (i8 weights/bias as lists) |
-| `add_dense_with_requant(weights, bias, M, shift)` | Dense with calibrated requant |
-| `add_conv2d(kernel, bias, in_ch, out_ch, kh, kw, stride, padding)` | Conv2D layer |
-| `add_conv2d_with_requant(kernel, bias, in_ch, out_ch, kh, kw, stride, padding, M, shift)` | Conv2D with calibrated requant |
-| `add_trainable_dense(in_features, out_features)` | Trainable Dense (RAM weights) |
-| `add_relu()` | ReLU activation |
-| `add_sigmoid()` | Sigmoid (fixed scale, for general use) |
-| `add_sigmoid_scaled(scale_mult, scale_shift)` | Sigmoid with scale-aware LUT |
-| `add_tanh()` | Tanh (fixed scale, for general use) |
-| `add_tanh_scaled(scale_mult, scale_shift)` | Tanh with scale-aware LUT |
-| `add_softmax()` | Softmax (pseudo-probabilities) |
-| `add_flatten()` | Flatten 3D→1D |
-| `add_max_pool2d(kernel, stride, padding)` | MaxPool2D |
-
-### Inference
+### Quick Summary
 
 ```python
-output = model.forward(input_i8_list)  # Returns list of i8 values
-```
-
-### Python Utilities (`scripts/nano_rust_utils.py`)
-
-```python
-from nano_rust_utils import quantize_to_i8, quantize_weights, calibrate_model
-
-# Quantize input
-q_input, input_scale = quantize_to_i8(float_array)
-
-# Quantize model weights
-q_weights = quantize_weights(pytorch_model)
-
-# Calibrate requantization parameters
-requant = calibrate_model(model, input_tensor, q_weights, input_scale)
-# Returns dict: layer_name → (M, shift, bias_corrected) for parametric layers
-#                             ('sigmoid', mult, shift) for Sigmoid
-#                             ('tanh', mult, shift) for Tanh
-```
-
----
-
-## 📓 Notebooks
-
-### Validation Notebooks (`notebooks/`)
-
-Quick-run notebooks using `_setup.py` for auto-build:
-
-| # | File | Description |
-|---|------|-------------|
-| 01 | `01_pipeline_validation.ipynb` | Conv→ReLU→Flatten→Dense end-to-end |
-| 02 | `02_mlp_classification.ipynb` | MLP (Dense→ReLU→Dense) |
-| 03 | `03_deep_cnn.ipynb` | Deep CNN with MaxPool |
-| 04 | `04_activation_functions.ipynb` | ReLU vs Sigmoid vs Tanh comparison |
-| 05 | `05_transfer_learning.ipynb` | Frozen backbone + trainable head |
-
-### Real-World Test Scripts (`notebooks-for-test/`)
-
-GPU-accelerated training → i8 quantization → NANO-RUST verification:
-
-| # | File | Task | Accuracy |
-|---|------|------|----------|
-| 06 | `run_06_mnist.py` | MNIST digit classification (CNN) | ~97% |
-| 07 | `run_07_fashion.py` | Fashion item classification (CNN) | ~87% |
-| 08 | `run_08_sensor.py` | Industrial sensor fusion (MLP) | ~98% |
-| 09 | `run_09_keyword_spotting.py` | Voice keyword spotting (MFCC+MLP) | ~79% |
-| 10 | `run_10_text_classifier.py` | Text classification (BoW+MLP) | 100% |
-
-Run all tests:
-```bash
-python notebooks-for-test/run_06_mnist.py
-# ... etc
-```
-
----
-
-## 🚀 ESP32 Deployment Guide
-
-### Step 1: Train & Export in Python
-
-```python
-import torch.nn as nn
+# Python: export model
 from nano_rust_utils import quantize_weights, calibrate_model, export_to_rust
 
-# 1. Train your PyTorch model
-model = nn.Sequential(
-    nn.Linear(416, 128), nn.ReLU(),
-    nn.Linear(128, 64), nn.ReLU(),
-    nn.Linear(64, 10),
-)
-# ... train on GPU ...
-
-# 2. Quantize & calibrate
-q_weights = quantize_weights(model)
-requant = calibrate_model(model, sample_input, q_weights, input_scale)
-
-# 3. Export to Rust source code
-rust_code = export_to_rust(model, "keyword_model", input_shape=[416])
-with open("model.rs", "w") as f:
+rust_code = export_to_rust(trained_model, "my_model", input_shape=[416])
+with open("src/model.rs", "w") as f:
     f.write(rust_code)
 ```
 
-### Step 2: Use in ESP32 Rust Firmware
-
 ```rust
+// Rust firmware: use exported model
 #![no_std]
-use nano_rust_core::{Arena, model::SequentialModel};
-
-// Generated model from export_to_rust()
 include!("model.rs");
 
-#[entry]
-fn main() -> ! {
-    // Arena in RAM — size from model.estimate_arena_size()
-    let mut arena_buf = [0u8; 16384];
-
-    loop {
-        // Get sensor/audio data → quantize to i8
-        let input: [i8; 416] = read_mfcc_features();
-
-        // Run inference (< 1ms on ESP32 @ 240MHz)
-        let mut arena = Arena::new(&mut arena_buf);
-        let model = build_keyword_model();  // From generated code
-        let (output, _) = model.forward(&input, &[416], &mut arena).unwrap();
-
-        let predicted_class = output.iter()
-            .enumerate()
-            .max_by_key(|(_, v)| **v)
-            .map(|(i, _)| i)
-            .unwrap();
-    }
-}
+let mut arena_buf = [0u8; 16384];
+let mut arena = Arena::new(&mut arena_buf);
+let model = build_my_model();
+let (output, _) = model.forward(&input_i8, &[416], &mut arena).unwrap();
+let class = nano_rust_core::math::argmax_i8(output);
 ```
-
-### Memory Budget (ESP32)
-
-| Component | Flash | RAM |
-|-----------|-------|-----|
-| Frozen weights | 60KB | 0B |
-| Arena buffer | 0B | 16KB |
-| Code + stack | ~20KB | ~4KB |
-| **Total** | **~80KB** | **~20KB** |
-| **Available** | **4MB** | **520KB** |
 
 ---
 
-## 🔧 Rust Core API (`nano-rust-core`)
+## 🔧 Rust Core API (for Firmware Developers)
 
 ### Layers
 
 ```rust
 use nano_rust_core::layers::*;
 
-// Frozen (Flash) — 0 bytes RAM for weights
-let dense = FrozenDense::new_with_requant(weights, bias, in_f, out_f, M, shift)?;
-let conv = FrozenConv2D::new_with_requant(kernel, bias, in_ch, out_ch, kh, kw, s, p, M, shift)?;
+// Frozen layers (weights in Flash — 0 bytes RAM)
+let dense = FrozenDense::new_with_requant(weights, bias, 784, 128, 1234, 15)?;
+let conv = FrozenConv2D::new_with_requant(kernel, bias, 1, 8, 3, 3, 1, 1, 2048, 14)?;
 
-// Trainable (RAM) — weights allocated in Arena
-let head = TrainableDense::new(in_features, out_features);
+// Trainable layer (weights in RAM — for fine-tuning)
+let head = TrainableDense::new(128, 10);
 
 // Activations
 let _ = ReLULayer;
@@ -283,7 +579,7 @@ let _ = SoftmaxLayer;
 
 // Structural
 let _ = FlattenLayer;
-let _ = MaxPool2DLayer::new(2, 2, 0)?;
+let pool = MaxPool2DLayer::new(2, 2, 0)?;
 ```
 
 ### Arena Allocator
@@ -308,19 +604,11 @@ use nano_rust_core::model::SequentialModel;
 let mut model = SequentialModel::new();
 model.add(Box::new(dense));
 model.add(Box::new(ReLULayer));
-let (output, shape) = model.forward(input, &input_shape, &mut arena)?;
+model.add(Box::new(dense2));
+
+let (output, out_shape) = model.forward(input, &[784], &mut arena)?;
+let class = nano_rust_core::math::argmax_i8(output);
 ```
-
----
-
-## 📊 Accuracy Targets
-
-| Model Type | Expected Max Diff (vs PyTorch) |
-|------------|-------------------------------|
-| Dense + ReLU | ≤ 3 |
-| Conv + ReLU + Dense | ≤ 5 |
-| Deep CNN + Pool | ≤ 10 |
-| Sigmoid/Tanh (scaled) | ≤ 20 |
 
 ---
 
@@ -328,40 +616,70 @@ let (output, shape) = model.forward(input, &input_shape, &mut arena)?;
 
 ```
 nano-rust/
-├── core/                    # Rust no_std core library
+├── core/                       # Rust no_std core library
 │   └── src/
-│       ├── lib.rs           # Crate root
-│       ├── arena.rs         # Bump pointer allocator
-│       ├── math.rs          # Matmul, conv2d, activations
-│       ├── error.rs         # Error types
-│       ├── model.rs         # SequentialModel
+│       ├── lib.rs              # Crate root & re-exports
+│       ├── arena.rs            # Bump pointer allocator
+│       ├── math.rs             # Quantized matmul, conv2d, activations
+│       ├── error.rs            # NanoError, NanoResult
+│       ├── model.rs            # SequentialModel (layer pipeline)
 │       └── layers/
-│           ├── mod.rs       # Layer trait + Shape
-│           ├── dense.rs     # FrozenDense + TrainableDense
-│           ├── conv.rs      # FrozenConv2D
-│           ├── activations.rs  # ReLU, Sigmoid, Tanh, Softmax
-│           ├── flatten.rs   # Flatten layer
-│           └── pooling.rs   # MaxPool2D
-├── py_binding/              # PyO3 Python bindings
-│   └── src/lib.rs
+│           ├── mod.rs          # Layer trait + Shape struct
+│           ├── dense.rs        # FrozenDense + TrainableDense
+│           ├── conv.rs         # FrozenConv2D (im2col+matmul)
+│           ├── activations.rs  # ReLU, Sigmoid, Tanh, Softmax (LUT)
+│           ├── flatten.rs      # Flatten 3D→1D
+│           └── pooling.rs      # MaxPool2D
+├── py_binding/                 # PyO3 Python bindings
+│   └── src/lib.rs              # PySequentialModel wrapper
 ├── scripts/
-│   ├── nano_rust_utils.py   # Quantization + calibration utilities
-│   └── export.py            # CLI weight exporter
-├── notebooks/               # Quick validation notebooks (01-05)
-├── notebooks-for-test/      # Real-world test scripts (06-10)
-├── pyproject.toml           # pip install configuration
-├── Cargo.toml               # Workspace config
-├── LICENSE                  # MIT License
+│   ├── nano_rust_utils.py      # Quantization, calibration, export tools
+│   └── export.py               # CLI weight exporter
+├── notebooks/                  # Validation notebooks (01-05)
+├── notebooks-for-test/         # Real-world test scripts (06-10)
+├── examples/                   # ESP32 deployment examples
+├── generated/                  # Exported Rust weight files
+├── pyproject.toml              # pip/maturin build config
+├── Cargo.toml                  # Rust workspace config
+├── LICENSE                     # MIT
 └── README.md
+```
+
+---
+
+## 🛠️ Development Setup
+
+Only needed if you want to modify the Rust source code:
+
+```bash
+# 1. Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# or: winget install Rustlang.Rust.MSVC
+
+# 2. Clone and setup
+git clone https://github.com/LeeNim/nano-rust.git
+cd nano-rust
+python -m venv .venv
+source .venv/bin/activate   # Linux/Mac
+# .venv\Scripts\activate    # Windows
+
+# 3. Install deps
+pip install maturin numpy torch torchvision ipykernel
+
+# 4. Build from source
+# Windows: set CARGO_TARGET_DIR outside OneDrive!
+$env:CARGO_TARGET_DIR = "$env:USERPROFILE\.nanorust_target"
+maturin develop --release
+
+# 5. Verify
+python -c "import nano_rust_py; print('OK')"
 ```
 
 ---
 
 ## 📜 License
 
-[MIT](LICENSE)
-
----
+[MIT](LICENSE) © 2026 Niem Le
 
 ## 🔮 Roadmap
 
