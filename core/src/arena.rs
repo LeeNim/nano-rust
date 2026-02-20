@@ -55,6 +55,8 @@ impl<'a> Arena<'a> {
     }
 
     /// Allocate a mutable slice of raw `u8` bytes.
+    ///
+    /// Used for general-purpose scratch buffers (e.g., im2col layout).
     pub fn alloc_u8_slice(&mut self, len: usize) -> NanoResult<&'a mut [u8]> {
         if self.offset + len > self.buf.len() {
             return Err(NanoError::ArenaExhausted {
@@ -66,10 +68,13 @@ impl<'a> Arena<'a> {
         let start = self.offset;
         self.offset += len;
 
+        // SAFETY: Same pattern as alloc_i8_slice — use raw pointer to extend
+        // lifetime to 'a. Sound because arena guarantees non-overlapping allocs.
         let slice = &mut self.buf[start..start + len];
         let ptr = slice.as_mut_ptr();
         let result = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
 
+        // Zero-initialize
         for val in result.iter_mut() {
             *val = 0;
         }
@@ -78,20 +83,37 @@ impl<'a> Arena<'a> {
     }
 
     /// Save a checkpoint of the current allocation offset.
+    ///
+    /// Use with `restore_checkpoint()` to free temporary allocations
+    /// while keeping earlier allocations alive.
+    ///
+    /// Example: Conv2D forward:
+    /// 1. Alloc output buffer → stays alive
+    /// 2. checkpoint = save_checkpoint()
+    /// 3. Alloc im2col scratch → temporary
+    /// 4. Compute conv2d using scratch
+    /// 5. restore_checkpoint(checkpoint) → im2col scratch freed
     #[inline(always)]
     pub fn save_checkpoint(&self) -> usize {
         self.offset
     }
 
-    /// Restore arena to a previous checkpoint.
+    /// Restore arena to a previous checkpoint, freeing all allocations
+    /// made after the checkpoint was saved.
+    ///
+    /// # Safety contract
+    /// The caller must ensure that no references to freed memory are used
+    /// after this call. Rust's borrow checker prevents most misuse, but
+    /// the caller should be careful with saved slice references.
     #[inline(always)]
     pub fn restore_checkpoint(&mut self, checkpoint: usize) {
+        // Only allow restoring to a valid previous position
         if checkpoint <= self.offset {
             self.offset = checkpoint;
         }
     }
 
-    /// Reset the arena fully.
+    /// Reset the arena fully, making all memory available again.
     pub fn reset(&mut self) {
         self.offset = 0;
     }

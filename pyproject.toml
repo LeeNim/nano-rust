@@ -36,6 +36,7 @@ Homepage = "https://github.com/LeeNim/nano-rust"
 Repository = "https://github.com/LeeNim/nano-rust"
 
 [tool.maturin]
+# Build the py_binding crate (not the workspace root)
 manifest-path = "py_binding/Cargo.toml"
 module-name = "nano_rust_py"
 

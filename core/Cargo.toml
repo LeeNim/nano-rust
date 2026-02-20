@@ -11,9 +11,11 @@ path = "src/lib.rs"
 
 [features]
 default = []
-std = []
+std = []  # Enable std for testing only
 
 [dependencies]
+# libm provides math functions (sqrt, exp, etc.) for no_std environments
 libm = "0.2"
 
 [dev-dependencies]
+# No extra dev deps needed — Rust built-in test framework is sufficient
