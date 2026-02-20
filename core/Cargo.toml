@@ -1,0 +1,19 @@
+[package]
+name = "nano-rust-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "no_std TinyML core: quantized i8 inference & training for microcontrollers"
+
+[lib]
+name = "nano_rust_core"
+path = "src/lib.rs"
+
+[features]
+default = []
+std = []
+
+[dependencies]
+libm = "0.2"
+
+[dev-dependencies]

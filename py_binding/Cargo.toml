@@ -1,0 +1,14 @@
+[package]
+name = "nano-rust-py"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Python bindings for nano-rust-core TinyML library via PyO3"
+
+[lib]
+name = "nano_rust_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+nano-rust-core = { path = "../core", features = ["std"] }
+pyo3 = { version = "0.22", features = ["extension-module"] }

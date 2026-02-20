@@ -1,0 +1,45 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "nano-rust-py"
+version = "0.1.0"
+description = "TinyML inference engine for embedded devices — Rust no_std core with Python bindings"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Niem Le"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Embedded Systems",
+]
+keywords = ["tinyml", "embedded", "rust", "quantization", "inference", "esp32"]
+
+[project.urls]
+Homepage = "https://github.com/LeeNim/nano-rust"
+Repository = "https://github.com/LeeNim/nano-rust"
+
+[tool.maturin]
+manifest-path = "py_binding/Cargo.toml"
+module-name = "nano_rust_py"
+
+[project.optional-dependencies]
+train = ["torch", "torchvision", "numpy"]
+audio = ["torchaudio", "soundfile"]
+dev = ["maturin", "pytest"]
