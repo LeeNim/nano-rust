@@ -1,0 +1,46 @@
+# Build artifacts
+target/
+*.rlib
+*.d
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Agent files (not needed in repo)
+.agent/
+
+# Sensitive / internal docs
+MASTER_COMMAND*.md
+PROJECT_REVIEW*.md
+PROJECT_VISION*.md
+System_Prompt_*.md
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OneDrive workaround
+.nanorust_target/
+
+# Downloaded datasets
+data/
+
+# Test result files
+*_results.txt
